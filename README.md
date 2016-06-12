@@ -7,8 +7,7 @@ Pigeon is a small library for packet transmission for Java. This module handles 
 You build a PigeonTcpServer like so:
 
 ```
-PigeonTcpClient client = Pigeon.newClient()
-    .withHost("localhost)
+PigeonTcpServer server = Pigeon.newServer()
     .withPacketHandler(new PacketHandler() {
         @Override
         public void handle(Packet packet) {
@@ -17,16 +16,15 @@ PigeonTcpClient client = Pigeon.newClient()
     })
     .build();
     
-client.connect();
+server.start();
 ```
 
-And at this point Pigeon will attempt a connection to localhost at the default port. Provided in the example are minimal required parameters for Pigeon to work - host and packet handler. The rest will be set to defaults.
+At this point Pigeon will establish a server and listen for incoming connections. Provided in the example are minimal required parameters for Pigeon to work - only the packet handler. The rest will be set to defaults.
 
 Here are all the possible configuration options:
 
 ```
-Pigeon.newClient()
-    .withHost("localhost")                                          // Defaults to null which will cause an error
+Pigeon.newServer()
     .withPort(9191)                                                 // Defaults to 9191
     .withIncomingPacketHandleMode(IncomingPacketHandleMode.HANDLER) // Defaults to HANDLER - see below for more options
     .withPacketHandler(new PacketHandler() {                        // Required when incoming packet mode is HANDLER
@@ -35,21 +33,22 @@ Pigeon.newClient()
 
         }
     })
-    .withClientCallbackHandler(clientCallbackHandler)               // Not required, no default
+    .withServerCallbackHandler(clientCallbackHandler)               // Not required, no default
     .withPackageToScan("com.github.rskupnik")                       // Not required, defaults to null which will cause the entire classpath to be scanned
     .withPropertiesFilename("my-properties.properties")             // Points the properties file to load, by default searched for pigeon-tcp-client.properties
+    .withReceiverThreadsNumber(0)                                   // Number of threads that will handle new connections, 0 = infinite, defaults to 0
     .build();
 ```
 
-Most of these can be provided in a properties file. By default, PigeonTcpClient will look for a pigeon-tcp-client.properties file
+Most of these can be provided in a properties file. By default, PigeonTcpServer will look for a pigeon-tcp-server.properties file
 either on the classpath or in the project's root folder. You can point to another properties file, however, using the
 `withProperties()` builder option - Pigeon will then look for that filename on the classpath or in the project's root folder.
 
 Here's how a configuration file looks like:
 
 ```
-host=localhost
 port=9192
+receiver_threads_number=1
 package_to_scan=com.github.rskupnik.pigeon.tcpserver
 packet_handle_mode=handler
 ```
@@ -98,8 +97,9 @@ Once the packet has been created and found by Pigeon, it can be easily sent usin
 TestPacket packet = new TestPacket();
 packet.setTestData(8);
 
-// Assume we have a properly initiated PigeonTcpClient under the variable 'client' here
-client.send(packet);
+// Assume we have a properly initiated PigeonTcpServer under the variable 'server' here and a proper connection under 'connection'
+server.send(packet, connection);    // Will send a packet to a single connection
+server.send(packet, Arrays.asList(connection)); // Will send a packet to a list of connections
 ```
 
 ### Receiving and handling packets
@@ -113,8 +113,7 @@ the `.withIncomingPacketHandleMode()` builder method.
 The default mode - HANDLER - will make a callback to the handler function you must provide when initializing the client:
 
 ```
-Pigeon.newClient()
-    .withHost("localhost)
+Pigeon.newServer()
     .withPacketHandler(new PacketHandler() {
         @Override
         public void handle(Packet packet) {
@@ -131,15 +130,14 @@ The other mode - QUEUE - will put the packet into a queue once it is received. A
 it's your task to poll the queue periodically and handle the packets.
 
 ```
-PigeonTcpClient client = Pigeon.newClient()
-    .withHost("localhost)
+PigeonTcpServer server = Pigeon.newServer()
     .withIncomingPacketHandleMode(IncomingPacketHandleMode.QUEUE)
     .build();
     
-client.connect();
+server.start();
     
 // Do this periodically in a separate thread
-List<Packet> packets = client.getIncomingPacketQueue().popAll();
+List<Packet> packets = server.getIncomingPacketQueue().popAll();
 for (Packet packet : packets) {
   if (packet.getId() == 1) {
     TestPacket testPacket = (TestPacket) packet;
@@ -148,29 +146,41 @@ for (Packet packet : packets) {
 }
 ```
 
+### Connection handling threads
+
+The `receiverThreadsNumber` configuration property controls how many threads will be used to handle the connections.
+If set to 0 (default), there will be no limit - each new connection will receive a separate thread to handle it.
+If set to a value > 0, a thread pool will be established with limited capacity and only as many connections will
+be allowed as many threads are available to handle them. Therefore, if you set this value to 1, Pigeon will only
+handle a single connection and reject any further connections until the thread is free.
+
 ## Callbacks
 
 You can provide Pigeon with a callback handler if you want to receive callbacks when specific things happen.
 
 ```
-class TestClientCallbackHandler implements ClientCallbackHandler {
+class TestServerCallbackHandler implements ServerCallbackHandler {
 
     @Override
-    public void onConnected() {
+    public void onStarted() {
 
+    }
+
+    @Override
+    public void onNewConnection(Connection connection) {
+        connections.add(connection);    // You might want to keep track of your connections
     }
 }
 
-PigeonTcpClient client = Pigeon.newClient()
-    .withHost("localhost)
+PigeonTcpServer server = Pigeon.newServer()
     .withIncomingPacketHandleMode(IncomingPacketHandleMode.QUEUE)
-    .withClientCallbackHandler(new TestClientCallbackHandler())
+    .withClientCallbackHandler(new TestServerCallbackHandler())
     .build();
 ```
 
-Currently, PigeonTcpClient only provides callback for the `onConnected` event.
+Currently, PigeonTcpServer only provides callback for the `onStarted` and `onNewConnection` events.
 
-### Rationale
+# Rationale
 
 I've found myself often in need of a simple library for handling packet communication in Java. Available libraries
 where usually too complex and rewriting the same custom code in each hobby project was tedious. I've created Pigeon to 
@@ -180,7 +190,7 @@ no wiring required.
 Pigeon does not aim to be the most performant, the most configurable or the safest packet handling library out there. It rather aims
 to be simple, easy to use and pick up. Therefore, it is mostly suitable for small hobby projects.
 
-### Future
+# Future
 
 * Handle more data types than just integer and string
 * Add support for SSL encryption?
