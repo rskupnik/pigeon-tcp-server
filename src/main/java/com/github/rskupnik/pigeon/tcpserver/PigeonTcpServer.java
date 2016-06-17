@@ -122,7 +122,9 @@ public final class PigeonTcpServer extends Thread implements PigeonServer {
                 Connection connection = new Connection(uuid, clientSocket);
                 if (connection.isOk()) {    // Connection is not considered ok when there is an IOException in the constructor
                     connection.attach(this);
-                    connections.put(uuid, connection);
+                    synchronized (connections) {
+                        connections.put(uuid, connection);
+                    }
                     log.info(String.format("Accepted a new connection [%s] from IP: %s", uuid, clientSocket.getInetAddress().getHostAddress()));
 
                     executorService.execute(connection);
@@ -149,12 +151,20 @@ public final class PigeonTcpServer extends Thread implements PigeonServer {
         switch (message) {
             case DISCONNECTED:
                 UUID connectionUuid = (UUID) payload;
-                Connection connection = connections.get(connectionUuid);
+                Connection connection = null;
+                synchronized (connections) {
+                    connection = connections.get(connectionUuid);
+                }
                 if (connection != null) {
-                    connections.remove(connectionUuid);
-                    log.debug("Removed connection [" + connectionUuid + "] from [" + (connection.getHost() != null ? connection.getHost() : "unknown") + "]");
-                    log.debug("Remaining connections: " + connections.entrySet().size());
+                    synchronized (connections) {
+                        connections.remove(connectionUuid);
+                        log.debug("Removed connection [" + connectionUuid + "] from [" + (connection.getHost() != null ? connection.getHost() : "unknown") + "]");
+                        log.debug("Remaining connections: " + connections.entrySet().size());
+                    }
                     connection.disconnect();
+
+                    if (serverCallbackHandler != null)
+                        serverCallbackHandler.onDisconnected(connection);
                 }
                 break;
             case RECEIVED_PACKET:
@@ -177,15 +187,19 @@ public final class PigeonTcpServer extends Thread implements PigeonServer {
     }
 
     public void send(Packet packet, List<Connection> connections) throws PigeonException {
-        for (Connection connection : connections) {
-            send(packet, connection);
+        synchronized (connections) {
+            for (Connection connection : connections) {
+                send(packet, connection);
+            }
         }
     }
 
     public void shutdown() {
         try {
-            for (Connection connection : connections.values()) {
-                connection.disconnect();
+            synchronized (connections) {
+                for (Connection connection : connections.values()) {
+                    connection.disconnect();
+                }
             }
             serverSocket.close();
             executorService.shutdown();
@@ -223,6 +237,12 @@ public final class PigeonTcpServer extends Thread implements PigeonServer {
 
     public ServerCallbackHandler getServerCallbackHandler() {
         return serverCallbackHandler;
+    }
+
+    public Map<UUID, Connection> getConnections() {
+        synchronized (connections) {
+            return new HashMap<UUID, Connection>(connections);
+        }
     }
 
     private boolean fixedNumberOfThreads() {
